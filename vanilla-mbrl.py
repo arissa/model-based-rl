@@ -69,7 +69,7 @@ def train_model(model, model_optimizer, obs_buffer, action_buffer, rewards_buffe
 	# model_loss = torch.mean(
 		# observation_loss + done_loss.expand_as(observation_loss) + reward_loss.expand_as(observation_loss)
 	# )
-	print("loss: %f " % (model_loss))
+	# print("loss: %f " % (model_loss))
 	# Update
 	model_optimizer.zero_grad()
 	model_loss.backward()
@@ -96,41 +96,53 @@ def discount_rewards(r):
 #input to policy network: obs
 #output from policy network: action
 #loss: reward based on the action outputted from policy network? 
-def train_policy(obs_buffer, action_buffer, rewards_buffer, status_buffer, model, policy):
-    # discounted_rewards_buffer = discount_rewards(rewards_buffer)
-    # discounted_rewards_buffer -= torch.mean(discounted_rewards_buffer)
-    # discounted_rewards_buffer /= torch.std(discounted_rewards_buffer)
-    # discounted_rewards_buffer = Variable(discounted_rewards_buffer, requires_grad=False)
-    action = policy(Variable(obs_buffer))  #forward pass to get actions
-    # _y = Variable(action_buffer, requires_grad=False)
-    # loglik = torch.log(_y*(_y - probability) + (1 - _y) * (_y + probability))
-    # loss = -torch.mean(discounted_rewards_buffer * loglik)
-    action = torch.from_numpy(action.data.numpy()).type(torch.FloatTensor)
-    # print(obs_buffer)
-    # print(action)
-    # state = torch.FloatTensor([[obs_buffer, action]])
-    # action = torch.FloatTensor(action)
-    state = torch.cat((obs_buffer, action), 1)
-    # print(state)
+def train_policy(obs_buffer, action_buffer, rewards_buffer, status_buffer, model, policy, policy_optimizer):
+	# discounted_rewards_buffer = discount_rewards(rewards_buffer)
+	# discounted_rewards_buffer -= torch.mean(discounted_rewards_buffer)
+	# discounted_rewards_buffer /= torch.std(discounted_rewards_buffer)
+	# discounted_rewards_buffer = Variable(discounted_rewards_buffer, requires_grad=False)
+	action = policy(Variable(obs_buffer))  #forward pass to get actions
+	# _y = Variable(action_buffer, requires_grad=False)
+	# loglik = torch.log(_y*(_y - probability) + (1 - _y) * (_y + probability))
+	# loss = -torch.mean(discounted_rewards_buffer * loglik)
+	action = torch.from_numpy(action.data.numpy()).type(torch.FloatTensor)
+	# print(obs_buffer)
+	# print(action)
+	# state = torch.FloatTensor([[obs_buffer, action]])
+	# action = torch.FloatTensor(action)
+	state = torch.cat((obs_buffer, action), 1)
+	# print(state)
 
-    # CONCATENATE ACTION AND OBS TO GET STATE, THEN INPUT INTO MODEL
-    # this only gives the reward at next timestep though
+	# CONCATENATE ACTION AND OBS TO GET STATE, THEN INPUT INTO MODEL
+	# this only gives the reward at next timestep though
 
-    _, reward, _ = model(Variable(state, requires_grad=False))
-    # print(reward)
-    loss = -reward
-    loss.backward()
+	_, reward, _ = model(Variable(state, requires_grad=False))
+	# print(reward)
+	loss = -reward
+	# print("loss: %f " % (loss))
+
+	# print(loss)
+	policy_optimizer.zero_grad()
+
+	loss.backward()
+	policy_optimizer.step()
+
+
+
 
 def model_based_rl():
 	env = gym.make('Swimmer-v2')
+
+	# initialize policy
 	policy = Policy(
-	    observation_space=env.observation_space.shape[0],  # State Space is a Box(4,)
-	    action_space=2,
-	    hidden_size=policy_hidden_size
+		observation_space=env.observation_space.shape[0],  # State Space is a Box(4,)
+		action_space=2,
+		hidden_size=policy_hidden_size
 	)
 	policy_optimizer = torch.optim.Adam(policy.parameters(), lr=learning_rate)
 	policy_optimizer.zero_grad()
 
+	# initialize model
 	model = Model(
 		observation_space=env.observation_space.shape[0],  # State Space is a Box(4,)
 		hidden_size=model_hidden_size,
@@ -141,64 +153,109 @@ def model_based_rl():
 	model_optimizer.zero_grad()
 
 
-	observation_history = []
-	reward_history = []
-	action_history = []
-	status_history = []	
+	while True:
+		#initialize empty dataset D
+		observation_history = []
+		reward_history = []
+		action_history = []
+		status_history = [] 
 
-	for i_episode in range(3000):
-		# print("EPISODE %d" % (i_episode))
-		observation = env.reset()
+		# collect samples from environment using policy and add them to D
+		for i_episode in range(30):
+			observation = env.reset()
 		# observation_history = []
 		# reward_history = []
 		# action_history = []
 		# status_history = []	   
-		episode_reward = 0.
-		for t in range(100):
-			if isinstance(observation, np.ndarray):
-				observation = torch.from_numpy(observation).type(torch.FloatTensor).view(1, env.observation_space.shape[0])
+			episode_reward = 0.
+			for t in range(100):
+				if isinstance(observation, np.ndarray):
+					observation = torch.from_numpy(observation).type(torch.FloatTensor).view(1, env.observation_space.shape[0])
 
-			observation_history.append(observation)
-			# state = observation
-			# state. 
-			train_policy(observation, None, None, None, model, policy)
-			# env.render()
-			## TODO: action should be the output from the policy network.
-			# action = env.action_space.sample()
-			action = policy(Variable(observation, requires_grad=False)) # should it be observation_history?
-			# print(action)
-			action = action.data.numpy()
-			# print(action)
-			action_history.append(action)
+				observation_history.append(observation)
 
-			observation, reward, done, info = env.step(action)
-			reward_history.append(reward)
-			status_history.append(done*1)
+				# env.render()
+				# this should be from the policy, not random
+				action = policy(Variable(observation, requires_grad=False)) 
+				action = action.data.numpy()
 
-			episode_reward += reward
-			# print('Reward %f.' % (reward))
+				# action = env.action_space.sample()
 
-			if done or t ==99:
-				print("Episode finished after {} timesteps".format(t+1))
-				print('Reward %f.' % (episode_reward))
-				# observation_buffer = torch.cat(observation_history)
-				# action_buffer = torch.from_numpy(np.vstack(action_history)).type(torch.FloatTensor)
-				# rewards_buffer = torch.from_numpy(np.vstack(reward_history)).type(torch.FloatTensor)
-				# status_buffer = torch.from_numpy(np.vstack(status_history)).type(torch.FloatTensor)
-				
-				# train_model(model, model_optimizer, observation_buffer, action_buffer, rewards_buffer, status_buffer)
-				break
+				action_history.append(action)
 
+				observation, reward, done, info = env.step(action)
+				reward_history.append(reward)
+				status_history.append(done*1)
+
+				episode_reward += reward
+				# print('Reward %f.' % (reward))
+
+				if done or t ==99:
+					print("Episode finished after {} timesteps".format(t+1))
+					print('Reward %f.' % (episode_reward))
+					break
 		observation_buffer = torch.cat(observation_history)
 		action_buffer = torch.from_numpy(np.vstack(action_history)).type(torch.FloatTensor)
 		rewards_buffer = torch.from_numpy(np.vstack(reward_history)).type(torch.FloatTensor)
 		status_buffer = torch.from_numpy(np.vstack(status_history)).type(torch.FloatTensor)
-		# print(observation_buffer.shape)
-		# print(action_buffer.shape)
-		# print(rewards_buffer.shape)
-		# print(status_buffer.shape)
-
+				
 		train_model(model, model_optimizer, observation_buffer, action_buffer, rewards_buffer, status_buffer)
+
+
+
+		for i_episode in range(30):
+			# print("EPISODE %d" % (i_episode))
+			observation = env.reset()
+			# observation_history = []
+			# reward_history = []
+			# action_history = []
+			# status_history = []      
+			episode_reward = 0.
+			for t in range(100):
+				if isinstance(observation, np.ndarray):
+					observation = torch.from_numpy(observation).type(torch.FloatTensor).view(1, env.observation_space.shape[0])
+
+				# observation_history.append(observation)
+				# state = observation
+				# state. 
+				train_policy(observation, None, None, None, model, policy, policy_optimizer)
+				# env.render()
+				## TODO: action should be the output from the policy network.
+				# action = env.action_space.sample()
+				action = policy(Variable(observation, requires_grad=False)) # should it be observation_history?
+				# print(action)
+				action = action.data.numpy()
+				# print(action)
+				# action_history.append(action)
+
+				observation, reward, done, info = env.step(action)
+				# reward_history.append(reward)
+				# status_history.append(done*1)
+
+				episode_reward += reward
+				# print('Reward %f.' % (reward))
+
+				if done or t == 99:
+					print("Episode finished after {} timesteps".format(t+1))
+					print('Reward %f.' % (episode_reward))
+					# observation_buffer = torch.cat(observation_history)
+					# action_buffer = torch.from_numpy(np.vstack(action_history)).type(torch.FloatTensor)
+					# rewards_buffer = torch.from_numpy(np.vstack(reward_history)).type(torch.FloatTensor)
+					# status_buffer = torch.from_numpy(np.vstack(status_history)).type(torch.FloatTensor)
+					
+					# train_model(model, model_optimizer, observation_buffer, action_buffer, rewards_buffer, status_buffer)
+					break
+
+			# observation_buffer = torch.cat(observation_history)
+			# action_buffer = torch.from_numpy(np.vstack(action_history)).type(torch.FloatTensor)
+			# rewards_buffer = torch.from_numpy(np.vstack(reward_history)).type(torch.FloatTensor)
+			# status_buffer = torch.from_numpy(np.vstack(status_history)).type(torch.FloatTensor)
+			# # print(observation_buffer.shape)
+			# print(action_buffer.shape)
+			# print(rewards_buffer.shape)
+			# print(status_buffer.shape)
+
+		# train_model(model, model_optimizer, observation_buffer, action_buffer, rewards_buffer, status_buffer)
 
 
 
