@@ -2,7 +2,8 @@ import gym
 import math
 import random
 import numpy as np
-
+import pickle
+from dataset import Dataset
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -49,29 +50,42 @@ class Policy(nn.Module):
         return action
 
 
-def train_model(model, model_optimizer, obs_buffer, action_buffer):
-    print("training model")
-    # Using previous states we will get predicted values for already known real parameters
-    # previous_actions = torch.abs(action_buffer[:-1] - 1)
+# def train_model(model, model_optimizer, obs_buffer, action_buffer):
+#     print("training model")
+#     # Using previous states we will get predicted values for already known real parameters
+#     # previous_actions = torch.abs(action_buffer[:-1] - 1)
+#
+#     # make sure action_buffer is the right shape and is being indexed correctly
+#     previous_actions = action_buffer[:-1]
+#     previous_states = torch.cat([obs_buffer[:-1, :], previous_actions], 1)
+#
+#     # Real parameters
+#     true_next_observation = Variable(obs_buffer[1:, :], requires_grad=False)
+#
+#     # Get predictions
+#     # we actually want to predict the change in observation, not the next observation
+#     predicted_next_observation = model(Variable(previous_states, requires_grad=False))
+#
+#     # Calculate losses
+#     observation_loss = (true_next_observation - predicted_next_observation).pow(2)
+#     model_loss = torch.mean(observation_loss)
+#
+#     # model_optimizer.zero_grad()
+#     model_loss.backward()
+#     model_optimizer.step()
 
-    # make sure action_buffer is the right shape and is being indexed correctly
-    previous_actions = action_buffer[:-1]
-    previous_states = torch.cat([obs_buffer[:-1, :], previous_actions], 1)
-
-    # Real parameters
-    true_next_observation = Variable(obs_buffer[1:, :], requires_grad=False)
-
-    # Get predictions
-    # we actually want to predict the change in observation, not the next observation
-    predicted_next_observation = model(Variable(previous_states, requires_grad=False))
-
-    # Calculate losses
-    observation_loss = (true_next_observation - predicted_next_observation).pow(2)
-    model_loss = torch.mean(observation_loss)
-
-    # model_optimizer.zero_grad()
+def train_model(model, model_optimizer, prev_states, next_obs):
+    prev_states = torch.from_numpy(prev_states).type(torch.FloatTensor)
+    next_obs = torch.from_numpy(next_obs).type(torch.FloatTensor)
+    predicted_next_obs = model(Variable(prev_states, requires_grad=False))
+    # print(next_obs)
+    # print(predicted_next_obs)
+    next_obs = Variable(next_obs)
+    obs_loss = (next_obs - predicted_next_obs).pow(2)
+    model_loss = torch.mean(obs_loss)
     model_loss.backward()
     model_optimizer.step()
+
 
 
 def discount_rewards(r):
@@ -126,6 +140,11 @@ def collect_samples(env, policy, batch_size):
     observations = []
     actions = []
     rewards = []
+
+    # max_eps_reward = -np.inf
+    # min_eps_reward = np.inf
+    # avg_eps_reward = 0.0
+
     total_timesteps = 0
     while total_timesteps < batch_size:
         obs_buffer = []
@@ -136,11 +155,13 @@ def collect_samples(env, policy, batch_size):
         obs_buffer.append(obs)
         episode_reward = 0.0
         for t in range(max_timestep):
-            action = policy(Variable(observation))
+            obs = torch.from_numpy(obs).type(torch.FloatTensor).view(1, env.observation_space.shape[0])
+            action = policy(Variable(obs))
+            action = action.data.numpy()
             obs, reward, done, info = env.step(action)
             obs_buffer.append(obs)
             # this says action[0] in the other code. why?
-            action_buffer.append(action)
+            action_buffer.append(action[0])
             reward_buffer.append(reward)
             episode_reward += reward
             total_timesteps += 1
@@ -178,52 +199,83 @@ def model_based_rl():
     model_optimizer.zero_grad()
 
     while True:
-        # initialize empty dataset D
-        observation_history = []
-        reward_history = []
-        action_history = []
-        status_history = []
+        # # initialize empty dataset D
+        # observation_history = []
+        # reward_history = []
+        # action_history = []
+        # status_history = []
+        #
+        # # collect samples from environment using policy and add them to D
+        # for i_episode in range(30):
+        #     observation = env.reset()
+        #
+        #     episode_reward = 0.
+        #     for t in range(max_timestep):
+        #         if isinstance(observation, np.ndarray):
+        #             observation = torch.from_numpy(observation).type(torch.FloatTensor).view(1,
+        #                                                                                      env.observation_space.shape[
+        #                                                                                          0])
+        #
+        #         observation_history.append(observation)
+        #
+        #         # env.render()
+        #         action = policy(Variable(observation, requires_grad=False))
+        #         action = action.data.numpy()
+        #
+        #         # action = env.action_space.sample()
+        #
+        #         action_history.append(action)
+        #         if (action != action).any():
+        #             print("Action is NaN")
+        #         observation, reward, done, info = env.step(action)
+        #         reward_history.append(reward)
+        #         status_history.append(done * 1)
+        #
+        #         episode_reward += reward
+        #         # print('Reward %f.' % (reward))
+        #
+        #         if done or t == 99:
+        #             print("Episode finished after {} timesteps".format(t + 1))
+        #             print('Reward %f.' % (episode_reward))
+        #             break
+        # observation_buffer = torch.cat(observation_history)
+        # action_buffer = torch.from_numpy(np.vstack(action_history)).type(torch.FloatTensor)
+        #
+        # print("obs_buffer")
+        # print(observation_buffer.shape)
+        # print("action_buffer")
+        # print(action_buffer.shape)
 
-        # collect samples from environment using policy and add them to D
-        for i_episode in range(30):
-            observation = env.reset()
+        D = Dataset()
+        observations, actions, rewards = collect_samples(env, policy, 1000)
+        prev_states = []
+        next_states = []
+        for i, observation_traj in enumerate(observations):
+            action_traj = actions[i]
+            for t in range(len(observation_traj) - 1):
+                # print(observation_traj[t])
+                # print(action_traj[t])
+                prev_states.append(np.concatenate([observation_traj[t], action_traj[t]]))
+                next_states.append(observation_traj[t+1])
+        prev_states = np.array(prev_states)
+        next_states = np.array(next_states)
+        D.add_data(np.array(prev_states), np.array(next_states))
 
-            episode_reward = 0.
-            for t in range(max_timestep):
-                if isinstance(observation, np.ndarray):
-                    observation = torch.from_numpy(observation).type(torch.FloatTensor).view(1,
-                                                                                             env.observation_space.shape[
-                                                                                                 0])
+        # print reward of 1 trajectory:
+        print("reward %f." % (np.sum(rewards[0])))
 
-                observation_history.append(observation)
-
-                # env.render()
-                # this should be from the policy, not random
-                action = policy(Variable(observation, requires_grad=False))
-                action = action.data.numpy()
-
-                # action = env.action_space.sample()
-
-                action_history.append(action)
-                if (action != action).any():
-                    print("Action is NaN")
-                observation, reward, done, info = env.step(action)
-                reward_history.append(reward)
-                status_history.append(done * 1)
-
-                episode_reward += reward
-                # print('Reward %f.' % (reward))
-
-                if done or t == 99:
-                    print("Episode finished after {} timesteps".format(t + 1))
-                    print('Reward %f.' % (episode_reward))
-                    break
-        observation_buffer = torch.cat(observation_history)
-        action_buffer = torch.from_numpy(np.vstack(action_history)).type(torch.FloatTensor)
-
+        # print("prev states")
+        # print(prev_states.shape)
+        # print("next states")
+        # print(next_states.shape)
+        # # all_prev_states = []
+        # # all_next_states = []
+        #
         # model optimization
-        # pretty sure this should be batched
-        train_model(model, model_optimizer, observation_buffer, action_buffer)
+        # # TODO: pretty sure this should be batched
+        for j in range(1000):
+            prev_states, next_states = D.get_next_batch(32)
+            train_model(model, model_optimizer, prev_states, next_states)
 
         # policy optimization
         for i_episode in range(30):
