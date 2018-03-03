@@ -51,6 +51,8 @@ class Policy(nn.Module):
             print("state is NaN")
             print(state)
         action = F.tanh(self.linear2(state))
+        if (action != action).any():
+            print("action is NaN in forward pass")
         return action
 
 
@@ -59,13 +61,16 @@ def train_models(models, model_optimizers, prev_states, next_obs):
     prev_states = torch.from_numpy(prev_states).type(torch.FloatTensor)
     next_obs = torch.from_numpy(next_obs).type(torch.FloatTensor)
     next_obs = Variable(next_obs)
+    model_loss = 0
     for i in range(n_models):
         predicted_next_obs = models[i](Variable(prev_states, requires_grad=False))
-        obs_loss = (next_obs - predicted_next_obs).pow(2)
+        model_loss += torch.mean(torch.sum((next_obs - predicted_next_obs).pow(2), 1))
 
-    model_loss = torch.mean(obs_loss)
+    # model_loss = torch.mean(obs_loss)
+    # model_loss = torch.from_numpy(model_loss).type(torch.FloatTensor)
     model_loss.backward()
-    model_optimizer.step()
+    for i in range(n_models):
+        model_optimizers[i].step()
 
 
 def cost(obs, a, next_obs):
@@ -76,29 +81,30 @@ def cost(obs, a, next_obs):
 # input to policy network: obs
 # output from policy network: action
 # loss: reward based on the action outputted from policy network?
-def train_policy(observation, model, policy, policy_optimizer):
+def train_policy(observation, models, policy, policy_optimizer):
     # print("training policy")
     loss = 0.
-    for t in range(num_policy_opt):
+    for i in range(n_models):
+        for t in range(num_policy_opt):
 
-        action = policy(Variable(observation))  # forward pass to get actions
-        action_tensor = torch.from_numpy(action.data.numpy()).type(torch.FloatTensor)
+            action = policy(Variable(observation))  # forward pass to get actions
+            action_tensor = torch.from_numpy(action.data.numpy()).type(torch.FloatTensor)
 
-        # state = torch.cat((obs_buffer[:-1,:], action), 1)
-        state = torch.cat((observation, action_tensor), 1)
+            # state = torch.cat((obs_buffer[:-1,:], action), 1)
+            state = torch.cat((observation, action_tensor), 1)
 
-        # print(state)
+            # print(state)
 
-        # in the model, simulate the trajectories and compute the summed discounted reward
-        next_observation = model(Variable(state))#, requires_grad=False))
-        next_observation = torch.from_numpy(next_observation.data.numpy()).type(torch.FloatTensor)
+            # in the model, simulate the trajectories and compute the summed discounted reward
+            next_observation = models[i](Variable(state))#, requires_grad=False))
+            next_observation = torch.from_numpy(next_observation.data.numpy()).type(torch.FloatTensor)
 
-        loss  += cost(observation, action, next_observation)
+            loss  += cost(observation, action, next_observation)
 
-        observation = next_observation
+            observation = next_observation
 
     # policy_optimizer.zero_grad()
-    policy_loss = loss
+    policy_loss = loss / n_models
     # print(policy_loss)
     policy_loss.backward()
     policy_optimizer.step()
@@ -125,6 +131,9 @@ def collect_samples(env, policy, batch_size, render=False):
         episode_reward = 0.0
         for t in range(max_timestep):
             obs = torch.from_numpy(obs).type(torch.FloatTensor).view(1, env.observation_space.shape[0])
+            if (obs != obs).any():
+                print("obs is NaN")
+                print(obs)
             action = policy(Variable(obs))
             action = action.data.numpy()
             if (action != action).any():
@@ -181,7 +190,7 @@ def me_trpo():
 
     while True:
         D = Dataset()
-        observations, actions, rewards = collect_samples(env, policy, 1000, render=True)
+        observations, actions, rewards = collect_samples(env, policy, 1000, render=render)
         prev_states = []
         next_states = []
         for i, observation_traj in enumerate(observations):
@@ -208,9 +217,10 @@ def me_trpo():
         # model optimization
         for j in range(1000):
             prev_states, next_states = D.get_next_batch(32)
-            train_model(model, model_optimizer, prev_states, next_states)
+            train_models(models, model_optimizers, prev_states, next_states)
 
         # policy optimization
+
         for i_episode in range(30):
             # print("EPISODE %d" % (i_episode))
             observation = env.reset()
@@ -218,7 +228,7 @@ def me_trpo():
             episode_reward = 0.
             if isinstance(observation, np.ndarray):
                 observation = torch.from_numpy(observation).type(torch.FloatTensor).view(1, env.observation_space.shape[0])
-            train_policy(observation, model, policy, policy_optimizer)
+            train_policy(observation, models, policy, policy_optimizer)
 
 
 def main():

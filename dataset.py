@@ -13,7 +13,7 @@ import torchvision.transforms as T
 
 # stores previous states (which consists of observation + action)
 # and next states (which consists of next observation)
-ckass Dataset:
+class Dataset:
     def __init__(self):
         self.prev_states = None
         self.next_states = None
@@ -33,8 +33,7 @@ ckass Dataset:
 
         if self.prev_states is not None:
             self.prev_states = np.concatenate([self.prev_states, prev_states], axis=0)
-            self.next_states = np.concatenate([self.next_states, next_sta
-                                               tes], axis=0)
+            self.next_states = np.concatenate([self.next_states, next_states], axis=0)
         else:
             self.prev_states = prev_states
             self.next_states = next_states
