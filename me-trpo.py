@@ -15,6 +15,7 @@ import torchvision.transforms as T
 policy_hidden_size = 32
 model_hidden_size = 1024
 state_size = 10  # 8 obs states + 2 action states
+n_models = 5
 
 learning_rate = 0.001
 gamma = 0.99  # discount factor for reward
@@ -54,14 +55,15 @@ class Policy(nn.Module):
 
 
 
-def train_model(model, model_optimizer, prev_states, next_obs):
+def train_models(models, model_optimizers, prev_states, next_obs):
     prev_states = torch.from_numpy(prev_states).type(torch.FloatTensor)
     next_obs = torch.from_numpy(next_obs).type(torch.FloatTensor)
-    predicted_next_obs = model(Variable(prev_states, requires_grad=False))
     next_obs = Variable(next_obs)
-    obs_loss = torch.sum((next_obs - predicted_next_obs).pow(2), 1)
-    model_loss = torch.mean(obs_loss)
+    for i in range(n_models):
+        predicted_next_obs = models[i](Variable(prev_states, requires_grad=False))
+        obs_loss = (next_obs - predicted_next_obs).pow(2)
 
+    model_loss = torch.mean(obs_loss)
     model_loss.backward()
     model_optimizer.step()
 
@@ -73,6 +75,7 @@ def cost(obs, a, next_obs):
 
 # input to policy network: obs
 # output from policy network: action
+# loss: reward based on the action outputted from policy network?
 def train_policy(observation, model, policy, policy_optimizer):
     # print("training policy")
     loss = 0.
@@ -145,8 +148,8 @@ def collect_samples(env, policy, batch_size, render=False):
     return observations, actions, rewards
 
 
-def model_based_rl():
-    render = False
+def me_trpo():
+    render = False #True
     env = gym.make('Swimmer-v2')
     #########################
     # Initialize Optimizers #
@@ -161,18 +164,24 @@ def model_based_rl():
     policy_optimizer = torch.optim.Adam(policy.parameters(), lr=learning_rate)
     policy_optimizer.zero_grad()
 
-    # initialize model
-    model = Model(
-        observation_size=env.observation_space.shape[0],
-        state_size=state_size,
-        hidden_size=model_hidden_size
-    )
-    model_optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
-    model_optimizer.zero_grad()
+    # initialize models
+    models = []
+    model_optimizers = []
+    for i in range(n_models):
+        model = Model(
+            observation_size=env.observation_space.shape[0],
+            state_size=state_size,
+            hidden_size=model_hidden_size
+        )
+        model_optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
+        model_optimizer.zero_grad()
+
+        models.append(model)
+        model_optimizers.append(model_optimizer)
 
     while True:
         D = Dataset()
-        observations, actions, rewards = collect_samples(env, policy, 1000, render=render)
+        observations, actions, rewards = collect_samples(env, policy, 1000, render=True)
         prev_states = []
         next_states = []
         for i, observation_traj in enumerate(observations):
@@ -206,6 +215,7 @@ def model_based_rl():
             # print("EPISODE %d" % (i_episode))
             observation = env.reset()
 
+            episode_reward = 0.
             if isinstance(observation, np.ndarray):
                 observation = torch.from_numpy(observation).type(torch.FloatTensor).view(1, env.observation_space.shape[0])
             train_policy(observation, model, policy, policy_optimizer)
@@ -213,7 +223,7 @@ def model_based_rl():
 
 def main():
 
-    model_based_rl()
+    me_trpo()
 
 
 main()
